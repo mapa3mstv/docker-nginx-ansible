@@ -93,4 +93,6 @@ docker compose run --rm ansible playbooks/manage.yml -e target=prod1 -e repo=myp
 - Linux с установленным Docker и nginx; доступ по SSH под пользователем с sudo (`become`).
 - Открытые 80/443 и DNS A-запись `*.base_domain` (или конкретного subdomain) на сервер —
   для Let's Encrypt webroot-челленджа.
-- certbot устанавливается плейбуком автоматически.
+- certbot устанавливается плейбуком автоматически (пакеты `certbot`, `python3-certbot-nginx`).
+- Получение сертификата: `certbot certonly --webroot -w /var/www/certbot -d <fqdn>` (email — переменная `ssl_email`).
+- Автопродление: плейбук ставит cron-задание `certbot renew --quiet --deploy-hook "reload nginx"` (ежедневно в 03:15), лог — `/var/log/certbot-renew.log`.

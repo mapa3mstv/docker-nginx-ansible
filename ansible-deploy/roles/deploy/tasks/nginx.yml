@@ -50,12 +50,38 @@
   changed_when: true
   register: certbot_run
 
+- name: Ensure cron is installed (for certificate renewal)
+  ansible.builtin.package:
+    name: cron
+    state: present
+
+- name: Service cron
+  ansible.builtin.service:
+    name: cron
+    state: started
+    enabled: true
+  failed_when: false   # в некоторых окружениях cron работает без systemd-юнита
+
 - name: Deploy reverse-proxy config with TLS
   ansible.builtin.template:
     src: nginx-reverse-proxy.conf.j2
     dest: "{{ nginx_conf_dir }}/{{ project_name }}.conf"
     mode: "0644"
   notify: Reload nginx
+
+- name: Install cron job for automatic letsencrypt certificate renewal
+  ansible.builtin.cron:
+    name: "certbot renew ({{ project_name }})"
+    minute: "15"
+    hour: "3"
+    weekday: "*"
+    day: "*"
+    month: "*"
+    job: >-
+      /usr/bin/certbot renew --quiet --deploy-hook
+      \"systemctl reload nginx || nginx -s reload\" >> /var/log/certbot-renew.log 2>&1
+    user: root
+    state: present
 
 - meta: flush_handlers
 
