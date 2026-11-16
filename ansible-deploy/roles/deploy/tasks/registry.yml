@@ -1,0 +1,38 @@
+---
+# Реестр деплоев на сервере: /etc/ansible-deploy/registry.yml
+# Связка: репозиторий (project_name) -> контейнер, образ, volumes, fqdn, хост-порт.
+# Используется плейбуками containers.yml / manage.yml для start|stop|restart|purge.
+- name: Read existing registry
+  ansible.builtin.slurp:
+    src: "{{ registry_file }}"
+  register: raw_registry
+  failed_when: false
+
+- name: Parse registry
+  ansible.builtin.set_fact:
+    registry: >-
+      {{ (raw_registry.content is defined)
+         | ternary((raw_registry.content | b64decode | from_yaml), {}) }}
+
+- name: Update registry entry for this project
+  ansible.builtin.set_fact:
+    registry: "{{ registry | combine({project_name: entry}) }}"
+  vars:
+    entry:
+      repo_url: "{{ repo_url }}"
+      ref: "{{ ref }}"
+      container: "{{ container_name }}"
+      image: "{{ image_name }}"
+      fqdn: "{{ fqdn }}"
+      app_port: "{{ app_port | default('80') }}"
+      host_port: "{{ host_port | default('unknown') }}"
+      purge_policy: "{{ purge_policy }}"
+      volumes: "{{ volumes }}"
+      nginx_conf: "{{ nginx_conf_dir }}/{{ project_name }}.conf"
+      deployed_at: "{{ '%Y-%m-%dT%H:%M:%SZ' | strftime(lookup('pipe', 'date +%s') | int, utc=True) }}"
+
+- name: Write registry file
+  ansible.builtin.copy:
+    content: "{{ registry | to_nice_yaml }}"
+    dest: "{{ registry_file }}"
+    mode: "0640"

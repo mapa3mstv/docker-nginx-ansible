@@ -1,0 +1,30 @@
+# Среда выполнения Ansible: изолированный контейнер.
+# Запуск:  docker compose run --rm ansible <playbook.yml> [доп. аргументы -e ...]
+# Пример:  docker compose run --rm ansible deploy.yml -e repo_url=... -e ref=main -e target=prod1
+services:
+  ansible:
+    build: ./docker
+    container_name: ansible-runner
+    volumes:
+      # Проект плейбуков
+      - .:/playbook:ro
+      # SSH-ключи для доступа к удаленным серверам (положите ключи в ./ssh_keys)
+      - ./ssh_keys:/root/.ssh:ro
+      # Локальный кэш git-клонирования репозиториев
+      - ansible_workspace:/workspace
+      # Реестр активных деплоев (state-файл inventory-фактов)
+      - deploy_registry:/registry
+    environment:
+      ANSIBLE_CONFIG: /playbook/ansible.cfg
+    working_dir: /playbook
+    entrypoint: ["/entrypoint.sh"]
+    networks:
+      - ansible-net
+
+volumes:
+  ansible_workspace:
+  deploy_registry:
+
+networks:
+  ansible-net:
+    driver: bridge

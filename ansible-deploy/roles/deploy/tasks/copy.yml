@@ -1,0 +1,40 @@
+---
+# Шаг 2: копируем склонированный репозиторий на удаленный сервер.
+# Архивируем локально (без .git — для сборки Dockerfile нужен только рабочий код),
+# распаковываем в app_base. Идемпотентно по контрольному файлу с ref.
+- name: Compute local archive name
+  ansible.builtin.set_fact:
+    local_tgz: "/tmp/{{ project_name }}-deploy.tgz"
+
+- name: Create source archive locally (excluding .git)
+  ansible.builtin.command:
+    cmd: "tar --exclude=.git -czf {{ local_tgz }} -C {{ local_clone }} ."
+  delegate_to: localhost
+  become: false
+  changed_when: true
+
+- name: Upload archive to remote server
+  ansible.builtin.copy:
+    src: "{{ local_tgz }}"
+    dest: "/tmp/{{ project_name }}-deploy.tgz"
+    mode: "0644"
+
+- name: Extract archive into app directory
+  ansible.builtin.unarchive:
+    src: "/tmp/{{ project_name }}-deploy.tgz"
+    dest: "{{ app_base }}"
+    remote_src: true
+    extra_opts: ["--overwrite"]
+
+- name: Write deploy marker (repo/ref)
+  ansible.builtin.copy:
+    content: |
+      repo={{ repo_url }}
+      ref={{ ref }}
+    dest: "{{ app_base }}/.ansible-deploy-ref"
+    mode: "0644"
+
+- name: Cleanup temp archive
+  ansible.builtin.file:
+    path: "/tmp/{{ project_name }}-deploy.tgz"
+    state: absent

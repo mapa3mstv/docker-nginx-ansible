@@ -1,0 +1,71 @@
+---
+# Шаг 5: nginx реверс-прокси subdomain.base_domain -> контейнер + TLS от Let's Encrypt.
+# Контейнер публикуется на 127.0.0.1:<random host port>; upstream = 127.0.0.1:host_port.
+- name: Get published host port for the container
+  ansible.builtin.command:
+    cmd: >-
+      {{ docker_bin }} port {{ container_name }} {{ app_port }}/tcp
+  register: published_port
+  changed_when: false
+  failed_when: published_port.rc != 0
+
+- name: Extract host port
+  ansible.builtin.set_fact:
+    host_port: "{{ published_port.stdout | regex_search(':([0-9]+)', '\\1') | first }}"
+
+- name: Install prerequisites (nginx, certbot)
+  ansible.builtin.package:
+    name:
+      - nginx
+      - certbot
+      - python3-certbot-nginx
+    state: present
+
+- name: Deploy temporary HTTP-only config for ACME challenge
+  ansible.builtin.template:
+    src: nginx-http-only.conf.j2
+    dest: "{{ nginx_conf_dir }}/{{ project_name }}.conf"
+    mode: "0644"
+  notify: Reload nginx
+
+- name: Ensure nginx is running
+  ansible.builtin.service:
+    name: nginx
+    state: started
+    enabled: true
+
+- name: Check existing certificate validity
+  ansible.builtin.command:
+    cmd: "certbot certificates"
+  register: cert_list
+  changed_when: false
+  failed_when: false
+
+- name: Obtain letsencrypt certificate (webroot)
+  ansible.builtin.command:
+    cmd: >-
+      certbot certonly --webroot -w {{ certbot_webroot }} -d {{ fqdn }}
+      --non-interactive --agree-tos -m {{ ssl_email }} --keep-until-expiring
+  when: fqdn not in (cert_list.stdout | default(''))
+  changed_when: true
+  register: certbot_run
+
+- name: Deploy reverse-proxy config with TLS
+  ansible.builtin.template:
+    src: nginx-reverse-proxy.conf.j2
+    dest: "{{ nginx_conf_dir }}/{{ project_name }}.conf"
+    mode: "0644"
+  notify: Reload nginx
+
+- meta: flush_handlers
+
+- name: Verify endpoint responds through nginx
+  ansible.builtin.uri:
+    url: "https://{{ fqdn }}/"
+    validate_certs: false
+    status_code: [200, 301, 302, 401, 404]
+  register: probe
+  retries: 5
+  delay: 3
+  until: probe is succeeded
+  ignore_errors: true   # приложение может долго греться — не валим деплой из-за этого

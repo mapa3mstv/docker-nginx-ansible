@@ -1,0 +1,37 @@
+---
+# Шаг 0/1: разбор devops.yaml, нормализация томов, проверка обязательных полей.
+- name: Assert required keys in devops.yaml
+  ansible.builtin.assert:
+    that:
+      - devops_cfg is mapping
+      - devops_cfg.nginx.subdomain | default('') | length > 0
+      - devops_cfg.docker.image | default('') | length > 0
+    fail_msg: "devops.yaml должен содержать nginx.subdomain и docker.image"
+
+- name: Set derived facts
+  ansible.builtin.set_fact:
+    fqdn: "{{ devops_cfg.nginx.subdomain }}.{{ base_domain }}"
+    image_name: "{{ devops_cfg.docker.image }}"
+    purge_policy: "{{ devops_cfg.docker.purgePolicy | default('container') }}"
+    volume_specs: >-
+      {{ (devops_cfg.docker.volumes | default([]))
+         | map('regex_findall', '([^:]+):([^:]+)')
+         | map('first') }}
+
+- name: Normalize volumes list to structured form
+  ansible.builtin.set_fact:
+    volumes: >-
+      {{ (volumes | default([])) + [ {'src': item[0], 'dst': item[1]} ] }}
+  loop: "{{ volume_specs }}"
+  loop_control:
+    label: "{{ item[0] }} -> {{ item[1] }}"
+
+- name: Show parsed configuration
+  ansible.builtin.debug:
+    msg:
+      project: "{{ project_name }}"
+      fqdn: "{{ fqdn }}"
+      image: "{{ image_name }}"
+      volumes: "{{ volumes }}"
+      purgePolicy: "{{ purge_policy }}"
+      log_level: "{{ log_level }}"

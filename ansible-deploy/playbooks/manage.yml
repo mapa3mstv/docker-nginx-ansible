@@ -1,0 +1,126 @@
+---
+# Управление контейнером конкретного репозитория.
+# Запуск:
+#   ansible-playbook playbooks/manage.yml -e target=prod1 -e repo=myproject -e action=start
+#   action: start | stop | restart | purge | logs
+#
+# purge выполняет docker.docker.purgePolicy из devops.yaml (запомнен в реестре):
+#   container  — остановить и удалить контейнер
+#   image      — + удалить образ и маршрут nginx
+#   deleteAll  — + удалить volumes проекта из /dockervolumes
+- name: Manage container by repository
+  hosts: "{{ target | default('localhost') }}"
+  gather_facts: false
+  vars:
+    registry_file: /etc/ansible-deploy/registry.yml
+    docker_bin: docker
+    allowed_actions: [start, stop, restart, purge, logs]
+  tasks:
+    - assert:
+        that:
+          - repo is defined and repo | length > 0
+          - action is defined and action in allowed_actions
+        fail_msg: "Нужно задать repo=<имя проекта из реестра> и action={{ allowed_actions | join('|') }}"
+
+    - name: Read registry
+      ansible.builtin.slurp:
+        src: "{{ registry_file }}"
+      register: raw_registry
+      failed_when: false
+
+    - name: Parse registry
+      ansible.builtin.set_fact:
+        registry: >-
+          {{ (raw_registry.content is defined)
+             | ternary((raw_registry.content | b64decode | from_yaml), {}) }}
+
+    - name: Assert project exists in registry
+      ansible.builtin.assert:
+        that: repo in registry
+        fail_msg: "Проект '{{ repo }}' не найден в реестре {{ registry_file }}. Известны: {{ registry.keys() | list }}"
+
+    - set_fact:
+        entry: "{{ registry[repo] }}"
+        container: "{{ registry[repo].container }}"
+
+    # --- start / stop / restart -------------------------------------------
+    - name: Start container
+      ansible.builtin.command: "{{ docker_bin }} start {{ container }}"
+      when: action == 'start'
+      changed_when: true
+
+    - name: Stop container
+      ansible.builtin.command: "{{ docker_bin }} stop {{ container }}"
+      when: action == 'stop'
+      changed_when: true
+
+    - name: Restart container
+      ansible.builtin.command: "{{ docker_bin }} restart {{ container }}"
+      when: action == 'restart'
+      changed_when: true
+
+    - name: Show recent logs (action=logs)
+      ansible.builtin.shell:
+        cmd: "{{ docker_bin }} logs --tail 200 {{ container }} 2>&1"
+      register: logs_out
+      changed_when: false
+      when: action == 'logs'
+
+    - name: Print logs
+      ansible.builtin.debug:
+        msg: "{{ logs_out.stdout_lines }}"
+      when: action == 'logs'
+
+    # --- purge по политике -------------------------------------------------
+    - name: Purge [container] - stop and remove container
+      ansible.builtin.command: "{{ docker_bin }} rm -f {{ container }}"
+      when: action == 'purge'
+      changed_when: true
+
+    - name: Purge [image+] - remove image
+      ansible.builtin.command: "{{ docker_bin }} image rm -f {{ entry.image }}"
+      when: action == 'purge' and entry.purge_policy in ['image', 'deleteAll']
+      changed_when: true
+
+    - name: Purge [image+] - remove nginx route and reload
+      when: action == 'purge' and entry.purge_policy in ['image', 'deleteAll']
+      block:
+        - ansible.builtin.file:
+            path: "{{ entry.nginx_conf }}"
+            state: absent
+        - ansible.builtin.service:
+            name: nginx
+            state: reloaded
+
+    - name: Purge [deleteAll] - remove project volumes from {{ volumes_root | default('/dockervolumes') }}
+      ansible.builtin.file:
+        path: "/dockervolumes/{{ item.src | basename }}"
+        state: absent
+      loop: "{{ entry.volumes | default([]) }}"
+      loop_control:
+        label: "{{ item.src }}"
+      when: action == 'purge' and entry.purge_policy == 'deleteAll'
+
+    - name: Purge [image/deleteAll] - remove app sources
+      ansible.builtin.file:
+        path: "/opt/apps/{{ repo }}"
+        state: absent
+      when: action == 'purge' and entry.purge_policy in ['image', 'deleteAll']
+
+    # --- обновляем реестр --------------------------------------------------
+    - name: Remove project from registry after purge
+      when: action == 'purge'
+      block:
+        - name: Rebuild registry without purged project
+          ansible.builtin.set_fact:
+            registry: "{{ registry | dict2items | rejectattr('key', 'eq', repo) | items2dict(key_name='key', value_name='value') }}"
+
+        - name: Write updated registry
+          ansible.builtin.copy:
+            content: "{{ registry | to_nice_yaml }}"
+            dest: "{{ registry_file }}"
+            mode: "0640"
+
+        - name: Report resulting registry keys
+          ansible.builtin.debug:
+            msg: "Registry now contains: {{ registry.keys() | list }}"

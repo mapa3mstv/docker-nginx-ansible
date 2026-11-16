@@ -1,0 +1,50 @@
+---
+# Шаг 3: сборка docker-образа на удаленном сервере.
+# Dockerfile в корне репозитория выполняет полный цикл CI (сборка + тесты).
+# Логи сборки сохраняются на сервере; при log_level=error выводим только ошибки.
+- name: Check that Dockerfile exists
+  ansible.builtin.stat:
+    path: "{{ app_base }}/Dockerfile"
+  register: dockerfile_stat
+
+- name: Fail if no Dockerfile
+  ansible.builtin.assert:
+    that: dockerfile_stat.stat.exists
+    fail_msg: "В {{ app_base }} отсутствует Dockerfile"
+
+- name: Ensure build logs directory
+  ansible.builtin.file:
+    path: "{{ app_base }}/.logs"
+    state: directory
+    mode: "0755"
+
+- name: Build docker image (full CI cycle inside Dockerfile)
+  ansible.builtin.shell:
+    cmd: >-
+      set -o pipefail;
+      {{ docker_bin }} build
+      -t {{ image_name }}:latest
+      -t {{ image_name }}:{{ ref | regex_replace('[^A-Za-z0-9._-]', '_') }}
+      -f {{ app_base }}/Dockerfile
+      {{ app_base }} 2>&1 | tee {{ app_base }}/.logs/build-latest.log
+  args:
+    executable: /bin/bash
+  register: docker_build
+  changed_when: true
+  timeout: "{{ build_timeout }}"
+
+- name: Print build log (filtered by log_level)
+  ansible.builtin.debug:
+    msg: "{{ filtered_build_log }}"
+  vars:
+    error_lines: >-
+      {{ docker_build.stdout_lines
+         | select('search', '(?i)(error|failed|fatal)')
+         | list }}
+    filtered_build_log: >-
+      {{ error_lines if log_level == 'error' else docker_build.stdout_lines }}
+
+- name: Fail with hint when build failed
+  ansible.builtin.fail:
+    msg: "Сборка завершилась ошибкой. Полный лог: {{ app_base }}/.logs/build-latest.log"
+  when: docker_build.rc != 0

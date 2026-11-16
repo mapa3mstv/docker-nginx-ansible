@@ -1,0 +1,35 @@
+---
+# Подготовка каталогов на удаленном сервере.
+- name: Ensure docker is present and daemon running
+  ansible.builtin.command: "{{ docker_bin }} info"
+  changed_when: false
+  register: docker_info
+  failed_when: docker_info.rc != 0
+
+- name: Create app base directory
+  ansible.builtin.file:
+    path: "{{ app_base }}"
+    state: directory
+    mode: "0755"
+
+- name: Create volumes root and project volume dirs
+  ansible.builtin.file:
+    path: "{{ volumes_root }}/{{ item.src | basename }}"
+    state: directory
+    mode: "0775"
+  loop: "{{ volumes }}"
+  loop_control:
+    label: "{{ volumes_root }}/{{ item.src | basename }}"
+
+- name: Ensure registry dir exists
+  ansible.builtin.file:
+    path: "{{ registry_file | dirname }}"
+    state: directory
+    mode: "0755"
+
+- name: Ensure certbot webroot exists (for ACME challenges)
+  ansible.builtin.file:
+    path: "{{ certbot_webroot }}"
+    state: directory
+    owner: "{{ nginx_user }}"
+    mode: "0755"

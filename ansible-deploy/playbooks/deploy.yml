@@ -1,0 +1,72 @@
+---
+# Главный CI/CD playbook: собрать репозиторий на удаленном сервере и запустить.
+#
+# Запуск (из контейнера ansible):
+#   ansible-playbook playbooks/deploy.yml \
+#     -e repo_url=git@example.com:team/myproject.git \
+#     -e ref=main \
+#     -e target=prod1 \
+#     -e log_level=error          # full | error — фильтрация логов сборки
+#
+# Шаги: clone -> select host by target -> copy -> docker build -> run/replace -> nginx+TLS
+- name: Validate run parameters
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - assert:
+        that:
+          - repo_url is defined and repo_url | length > 0
+          - ref is defined and ref | length > 0
+          - target is defined and target | length > 0
+        fail_msg: >-
+          Требуется задать: repo_url (git-адрес), ref (ветка/коммит), target (имя хоста из inventory).
+          Необязательно: log_level=full|error (по умолчанию full)
+
+- name: Clone repository locally (step 0)
+  hosts: localhost
+  gather_facts: true
+  vars:
+    workspace_root: "{{ playbook_dir }}/../workspace"
+  tasks:
+    - set_fact:
+        project_name: "{{ repo_url | regex_replace('^.*/', '') | regex_replace('\\.git$', '') }}"
+        local_clone: "{{ workspace_root }}/{{ repo_url | regex_replace('^.*/', '') | regex_replace('\\.git$', '') }}"
+
+    - file:
+        path: "{{ local_clone }}"
+        state: absent
+
+    - git:
+        repo: "{{ repo_url }}"
+        dest: "{{ local_clone }}"
+        version: "{{ ref }}"
+        depth: 50
+        force: true
+
+    - stat:
+        path: "{{ local_clone }}/devops.yaml"
+      register: devops_file
+
+    - assert:
+        that: devops_file.stat.exists
+        fail_msg: "В репозитории '{{ project_name }}' отсутствует devops.yaml"
+
+    - set_fact:
+        devops_cfg_raw: "{{ lookup('file', local_clone ~ '/devops.yaml') }}"
+
+- name: Deploy to selected remote server (steps 1-5)
+  hosts: "{{ target | default('localhost') }}"
+  become: "{{ deploy_become | default(true) }}"
+  gather_facts: true
+  vars:
+    # из previous play
+    project_name: "{{ hostvars['localhost'].project_name }}"
+    local_clone: "{{ hostvars['localhost'].local_clone }}"
+    devops_cfg: "{{ hostvars['localhost'].devops_cfg_raw | from_yaml }}"
+    log_level: "{{ log_level | default('full') }}"
+    # пути на сервере
+    app_base: "/opt/apps/{{ project_name }}"
+    volumes_root: /dockervolumes
+    registry_file: /etc/ansible-deploy/registry.yml
+  roles:
+    - deploy

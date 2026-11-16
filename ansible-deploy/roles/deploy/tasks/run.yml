@@ -1,0 +1,60 @@
+---
+# Шаг 4: запуск собранного образа либо замена текущего контейнера.
+# Гарантия правила «один репозиторий — не более одного контейнера»:
+# имя контейнера фиксировано (= docker.image), перед запуском старый удаляется.
+- name: Check if container with this name already exists
+  ansible.builtin.shell:
+    cmd: "{{ docker_bin }} ps -a --filter name=^/{{ container_name }}$ --format '{{ '{{' }}.ID{{ '}}' }}'"
+  register: existing_container
+  changed_when: false
+
+- name: Stop and remove old container (replace flow)
+  ansible.builtin.command:
+    cmd: "{{ docker_bin }} rm -f {{ container_name }}"
+  when: existing_container.stdout | trim | length > 0
+  changed_when: true
+
+- name: Build docker run arguments
+  ansible.builtin.set_fact:
+    run_vargs: >-
+      {{ (run_vargs | default([])) + ['-v',
+         (volumes_root ~ '/' ~ (item.src | basename) ~ ':' ~ item.dst)] }}
+  loop: "{{ volumes }}"
+  loop_control:
+    label: "{{ item.src }} -> {{ item.dst }}"
+
+- name: Run new container (published on random localhost port for nginx upstream)
+  ansible.builtin.command:
+    cmd: >-
+      {{ docker_bin }} run -d
+      --name {{ container_name }}
+      --restart unless-stopped
+      -p 127.0.0.1::{{ app_port | default('80') }}
+      {{ run_vargs | join(' ') }}
+      {{ image_name }}:latest
+  register: docker_run
+  changed_when: true
+
+- name: Wait for container to stay running
+  ansible.builtin.shell:
+    cmd: >-
+      sleep 3;
+      {{ docker_bin }} inspect -f '{{ '{{' }} .State.Running {{ '}}' }}' {{ container_name }}
+  register: running_check
+  changed_when: false
+  failed_when: "'true' not in running_check.stdout"
+
+- name: Show container startup logs
+  ansible.builtin.shell:
+    cmd: "{{ docker_bin }} logs --tail 200 {{ container_name }} 2>&1"
+  register: container_logs
+  changed_when: false
+
+- name: Print startup log (filtered by log_level)
+  ansible.builtin.debug:
+    msg: "{{ filtered_logs }}"
+  vars:
+    error_lines: >-
+      {{ container_logs.stdout_lines | select('search', '(?i)(error|failed|fatal)') | list }}
+    filtered_logs: >-
+      {{ error_lines if log_level == 'error' else container_logs.stdout_lines }}

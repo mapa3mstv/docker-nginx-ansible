@@ -1,0 +1,25 @@
+---
+# Переменные роли deploy (значения по умолчанию).
+docker_bin: docker
+build_timeout: 3600
+run_network: bridge
+
+# Имя контейнера = имя docker-образа из devops.yaml:
+# один репозиторий не может иметь более одного запущенного контейнера.
+container_name: "{{ devops_cfg.docker.image }}"
+
+# Пути на удаленном сервере
+app_base: "/opt/apps/{{ project_name }}"          # исходники проекта
+volumes_root: /dockervolumes                       # общий каталог томов
+registry_file: /etc/ansible-deploy/registry.yml    # реестр деплоев (репозиторий -> контейнер/образ/хост)
+
+# nginx / TLS
+nginx_conf_dir: /etc/nginx/conf.d
+nginx_user: www-data
+certbot_webroot: /var/www/certbot
+ssl_email: "admin@{{ base_domain | default('example.com') }}"
+fullchain_path: "/etc/letsencrypt/live/{{ fqdn }}/fullchain.pem"
+privkey_path: "/etc/letsencrypt/live/{{ fqdn }}/privkey.pem"
+
+# Фильтрация логов сборки: full | error
+log_level: full

@@ -1,0 +1,13 @@
+# Временный HTTP-only конфиг для ACME-выдачи сертификата (шаг 5).
+server {
+    listen 80;
+    server_name {{ fqdn }};
+
+    location /.well-known/acme-challenge/ {
+        root {{ certbot_webroot }};
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}

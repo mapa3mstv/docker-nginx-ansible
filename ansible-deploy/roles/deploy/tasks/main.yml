@@ -1,0 +1,21 @@
+---
+- name: Parse devops.yaml and validate structure
+  ansible.builtin.import_tasks: parse.yml
+
+- name: Prepare remote directories
+  ansible.builtin.import_tasks: prepare.yml
+
+- name: Copy cloned repository to remote server
+  ansible.builtin.import_tasks: copy.yml
+
+- name: Build docker image on remote server
+  ansible.builtin.import_tasks: build.yml
+
+- name: Run or replace container
+  ansible.builtin.import_tasks: run.yml
+
+- name: Configure nginx reverse proxy with letsencrypt TLS
+  ansible.builtin.import_tasks: nginx.yml
+
+- name: Update deploy registry
+  ansible.builtin.import_tasks: registry.yml
